@@ -40,6 +40,21 @@ def get_pool() -> ConnectionPool:
     return _pool
 
 
+def close_pool() -> None:
+    """Close the pool if one was opened.
+
+    psycopg's pool runs worker threads that print
+    `couldn't stop thread 'pool-1-worker-N' within 5.0 seconds` on interpreter
+    shutdown when the pool is garbage-collected without being closed -- harmless
+    but noisy, and noise in a pipeline's output is a real cost. The CLI calls
+    this before it returns; the long-lived API process never does.
+    """
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        _pool = None
+
+
 @contextmanager
 def connection() -> Iterator[psycopg.Connection]:
     """Yield a pooled connection. Commits on clean exit, rolls back on error."""

@@ -8,9 +8,13 @@ and the cause is invisible from the outside.
 
 Retention is therefore a design input, not a cleanup task:
 
-    raw_requests    30 days   payload kept for replaying rule changes
+    raw_requests     7 days   payload kept for replaying recent rule changes
     clean_requests  60 days   the serving window
     daily_agg       forever   never pruned, and the reason the app ages well
+
+`raw_requests` was 30 days until the first real ingest filled the 0.5 GB budget
+in a single run (BREAKS.md 2026-09-07) -- the payload column is ~1.6 KB a row
+and 30 days of it is more than half the plan on its own.
 
 `validation_failures` is pruned alongside the raw table, since a failure whose
 record is gone cannot be investigated anyway.
@@ -24,9 +28,12 @@ from app.config import settings
 def prune(cur) -> tuple[int, int]:
     """Delete rows outside the retention windows. Returns (raw, clean) counts.
 
-    Takes a cursor rather than opening its own connection so it runs inside
-    the ingest run's transaction -- a run that fails after pruning should not
-    have pruned.
+    Takes a cursor rather than opening its own connection so the caller
+    controls the transaction. The ingest run calls this first, before
+    fetching, and commits it on its own: every row deleted here is already
+    outside its window, so the delete is correct regardless of whether the
+    rest of the run succeeds -- and doing it up front is what lets a database
+    that hit its size limit recover on the next run instead of failing again.
     """
     cur.execute(
         "DELETE FROM raw_requests WHERE ingested_at < now() - make_interval(days => %s)",
@@ -64,10 +71,10 @@ def estimate_sizes(db_module) -> list[dict]:
     return db_module.query(
         """
         SELECT
-            relname AS table_name,
+            c.relname AS table_name,
             pg_size_pretty(pg_total_relation_size(c.oid)) AS size,
             pg_total_relation_size(c.oid) AS size_bytes,
-            n_live_tup AS approx_rows
+            s.n_live_tup AS approx_rows
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid

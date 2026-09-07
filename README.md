@@ -62,9 +62,9 @@ full backfill is not a long job — it is an impossible one.
 
 | Table | Retention | Why |
 |---|---|---|
-| `raw_requests` | 30 days | untouched payloads, so a rule change can be replayed without re-fetching |
+| `raw_requests` | 7 days | untouched payloads, so a recent rule change can be replayed without re-fetching (was 30; see BREAKS.md 2026-09-07) |
 | `clean_requests` | 60 days | the serving window |
-| `validation_failures` | 30 days | a failure whose record is gone cannot be investigated |
+| `validation_failures` | 7 days | a failure whose record is gone cannot be investigated |
 | `daily_agg` | **permanent** | a few MB holds years; this is what makes the app worth opening in April |
 | `ingest_runs` | 365 days | the evidence it has been alive for months |
 

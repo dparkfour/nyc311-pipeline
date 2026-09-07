@@ -46,7 +46,11 @@ def cmd_probe(args) -> int:
 def cmd_ingest(args) -> int:
     from app.pipeline import ingest
     try:
-        ingest.run(trigger=args.trigger, days_back=args.days_back)
+        ingest.run(
+            trigger=args.trigger,
+            days_back=args.days_back,
+            reset_watermark=args.reset,
+        )
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"ingest failed: {exc}", file=sys.stderr)
@@ -132,7 +136,9 @@ def main(argv=None) -> int:
     p = sub.add_parser("ingest", help="run the pipeline once")
     p.add_argument("--trigger", default="manual", choices=["manual", "schedule", "backfill"])
     p.add_argument("--days-back", type=int, default=3,
-                   help="starting watermark when none is stored yet")
+                   help="starting watermark when none is stored yet (or with --reset)")
+    p.add_argument("--reset", action="store_true",
+                   help="ignore the stored watermark and start --days-back days ago")
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser("rollup", help="rebuild daily aggregates")
@@ -151,7 +157,11 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_reset_watermark)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    finally:
+        from app import db
+        db.close_pool()
 
 
 if __name__ == "__main__":

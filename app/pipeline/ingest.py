@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
@@ -107,68 +107,74 @@ def write_raw(cur, rows: list[dict], run_id: int) -> None:
     )
 
 
-def write_clean(cur, records: list[dict]) -> tuple[int, int]:
-    """Upsert into the serving table.
+_CLEAN_UPSERT = """
+    INSERT INTO clean_requests (
+        unique_key, created_date, closed_date, agency, agency_name,
+        complaint_type, complaint_type_norm, descriptor, status, borough,
+        incident_zip, incident_address, address_norm, latitude, longitude,
+        resolution_description, source_updated_at, defect_count,
+        zip_borough_conflict, unrecognized_type, updated_at
+    ) VALUES (
+        %(unique_key)s, %(created_date)s, %(closed_date)s, %(agency)s,
+        %(agency_name)s, %(complaint_type)s, %(complaint_type_norm)s,
+        %(descriptor)s, %(status)s, %(borough)s, %(incident_zip)s,
+        %(incident_address)s, %(address_norm)s, %(latitude)s, %(longitude)s,
+        %(resolution_description)s, %(source_updated_at)s, %(defect_count)s,
+        %(zip_borough_conflict)s, %(unrecognized_type)s, now()
+    )
+    ON CONFLICT (unique_key) DO UPDATE SET
+        created_date = EXCLUDED.created_date,
+        closed_date = EXCLUDED.closed_date,
+        agency = EXCLUDED.agency,
+        agency_name = EXCLUDED.agency_name,
+        complaint_type = EXCLUDED.complaint_type,
+        complaint_type_norm = EXCLUDED.complaint_type_norm,
+        descriptor = EXCLUDED.descriptor,
+        status = EXCLUDED.status,
+        borough = EXCLUDED.borough,
+        incident_zip = EXCLUDED.incident_zip,
+        incident_address = EXCLUDED.incident_address,
+        address_norm = EXCLUDED.address_norm,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        resolution_description = EXCLUDED.resolution_description,
+        source_updated_at = EXCLUDED.source_updated_at,
+        defect_count = EXCLUDED.defect_count,
+        zip_borough_conflict = EXCLUDED.zip_borough_conflict,
+        unrecognized_type = EXCLUDED.unrecognized_type,
+        updated_at = now()
+    RETURNING (xmax = 0) AS was_insert
+"""
 
-    Returns (inserted, updated). `xmax = 0` on the returned row is the
-    Postgres idiom for "this was an insert, not an update" -- it saves a second
-    round trip to distinguish new records from revised ones, and that split is
-    what the panel shows as new-vs-updated.
+
+def write_clean(cur, records: list[dict]) -> tuple[int, int]:
+    """Upsert a page into the serving table in one pipelined round trip.
+
+    Returns (inserted, updated). `executemany(..., returning=True)` sends the
+    whole batch down one pipeline and hands back one result set per row;
+    `xmax = 0` on each is the Postgres idiom for "this was an insert, not an
+    update", which is the new-vs-revised split the panel shows.
+
+    The previous version issued a separate `cur.execute` per record. Against a
+    remote database with a day-wide watermark gap that was the pipeline's
+    dominant cost -- 82 minutes for 110k rows. See BREAKS.md 2026-09-07.
     """
     if not records:
         return (0, 0)
 
+    cur.executemany(_CLEAN_UPSERT, records, returning=True)
+
     inserted = 0
     updated = 0
-
-    for record in records:
-        row = None
-        cur.execute(
-            """
-            INSERT INTO clean_requests (
-                unique_key, created_date, closed_date, agency, agency_name,
-                complaint_type, complaint_type_norm, descriptor, status, borough,
-                incident_zip, incident_address, address_norm, latitude, longitude,
-                resolution_description, source_updated_at, defect_count,
-                zip_borough_conflict, unrecognized_type, updated_at
-            ) VALUES (
-                %(unique_key)s, %(created_date)s, %(closed_date)s, %(agency)s,
-                %(agency_name)s, %(complaint_type)s, %(complaint_type_norm)s,
-                %(descriptor)s, %(status)s, %(borough)s, %(incident_zip)s,
-                %(incident_address)s, %(address_norm)s, %(latitude)s, %(longitude)s,
-                %(resolution_description)s, %(source_updated_at)s, %(defect_count)s,
-                %(zip_borough_conflict)s, %(unrecognized_type)s, now()
-            )
-            ON CONFLICT (unique_key) DO UPDATE SET
-                created_date = EXCLUDED.created_date,
-                closed_date = EXCLUDED.closed_date,
-                agency = EXCLUDED.agency,
-                agency_name = EXCLUDED.agency_name,
-                complaint_type = EXCLUDED.complaint_type,
-                complaint_type_norm = EXCLUDED.complaint_type_norm,
-                descriptor = EXCLUDED.descriptor,
-                status = EXCLUDED.status,
-                borough = EXCLUDED.borough,
-                incident_zip = EXCLUDED.incident_zip,
-                incident_address = EXCLUDED.incident_address,
-                address_norm = EXCLUDED.address_norm,
-                latitude = EXCLUDED.latitude,
-                longitude = EXCLUDED.longitude,
-                resolution_description = EXCLUDED.resolution_description,
-                source_updated_at = EXCLUDED.source_updated_at,
-                defect_count = EXCLUDED.defect_count,
-                zip_borough_conflict = EXCLUDED.zip_borough_conflict,
-                unrecognized_type = EXCLUDED.unrecognized_type,
-                updated_at = now()
-            RETURNING (xmax = 0) AS was_insert
-            """,
-            record,
-        )
+    while True:
         row = cur.fetchone()
-        if row and row["was_insert"]:
-            inserted += 1
-        else:
-            updated += 1
+        if row is not None:
+            if row["was_insert"]:
+                inserted += 1
+            else:
+                updated += 1
+        if not cur.nextset():
+            break
 
     return (inserted, updated)
 
@@ -246,12 +252,22 @@ def run_dedup(cur, touched_keys: list[str], window_minutes: int) -> int:
 # The run
 # ---------------------------------------------------------------------------
 
-def run(trigger: str = "manual", days_back: int = 3, verbose: bool = True) -> dict:
+def run(
+    trigger: str = "manual",
+    days_back: int = 3,
+    verbose: bool = True,
+    reset_watermark: bool = False,
+) -> dict:
     started = time.monotonic()
     now = datetime.now(timezone.utc)
 
     watermark_raw = db.get_state(WATERMARK_KEY)
-    watermark = parse_ts(watermark_raw) if watermark_raw else socrata.default_watermark(days_back)
+    if reset_watermark or not watermark_raw:
+        watermark = socrata.default_watermark(days_back)
+        if watermark_raw and verbose:
+            print(f"run: --reset given, watermark moved back to {watermark.isoformat()}")
+    else:
+        watermark = parse_ts(watermark_raw)
 
     run_id = start_run(trigger, watermark)
 
@@ -273,16 +289,27 @@ def run(trigger: str = "manual", days_back: int = 3, verbose: bool = True) -> di
     if verbose:
         print(f"run {run_id}: watermark {watermark.isoformat()}")
 
-    touched_keys: list[str] = []
+    affected_days: set[date] = set()
     max_updated = watermark
 
     try:
+        # Prune before fetching, not after. A database that filled its budget on
+        # a previous run can only recover if the old rows go before the new ones
+        # arrive -- pruning at the end of the run is too late to help. Deletes
+        # are all outside the retention window, so committing them independently
+        # of this run's outcome is safe.
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                stats["raw_pruned"], stats["clean_pruned"] = retention.prune(cur)
+
         for page in socrata.fetch_since(watermark):
             stats["pages_fetched"] += 1
             stats["rows_fetched"] += len(page)
 
             records = []
             failures_by_key: dict[str, list] = {}
+            page_keys: list[str] = []
+            page_max_updated = max_updated
 
             for raw_row in page:
                 record = shape(raw_row)
@@ -291,8 +318,8 @@ def run(trigger: str = "manual", days_back: int = 3, verbose: bool = True) -> di
                     continue
 
                 updated_at = record["source_updated_at"]
-                if updated_at and updated_at > max_updated:
-                    max_updated = updated_at
+                if updated_at and updated_at > page_max_updated:
+                    page_max_updated = updated_at
 
                 failures = validate.validate(record, now=now)
                 if failures:
@@ -308,39 +335,41 @@ def run(trigger: str = "manual", days_back: int = 3, verbose: bool = True) -> di
                     stats["unrecognized_types"] += 1
 
                 records.append(to_clean_row(record, failures))
-                touched_keys.append(record["unique_key"])
+                page_keys.append(record["unique_key"])
 
+            # One transaction per page: raw payloads, clean rows, failures and
+            # this page's dedup either all land or none do.
             with db.connection() as conn:
                 with conn.cursor() as cur:
                     write_raw(cur, page, run_id)
                     inserted, updated = write_clean(cur, records)
                     write_failures(cur, failures_by_key, run_id)
+                    stats["duplicates_collapsed"] += run_dedup(
+                        cur, page_keys, settings.dedup_window_minutes
+                    )
             stats["rows_inserted"] += inserted
             stats["rows_updated"] += updated
+
+            # Roll up the days this page touched, THEN advance the watermark. In
+            # that order an interruption re-does a page rather than skipping its
+            # aggregates: the run is resumable at page granularity, which is
+            # what stops a killed or timed-out run from restarting at zero and
+            # re-fetching the whole gap. See BREAKS.md 2026-09-07.
+            affected_days.update(aggregate.rollup(page_keys))
+
+            if page_max_updated > max_updated:
+                max_updated = page_max_updated
+                new_watermark = max_updated + timedelta(milliseconds=1)
+                db.set_state(WATERMARK_KEY, new_watermark.isoformat())
+                stats["watermark_after"] = new_watermark
 
             if verbose:
                 print(
                     f"  page {stats['pages_fetched']}: {len(page)} rows -> "
                     f"+{inserted} new, ~{updated} revised, "
-                    f"{stats['rows_rejected']} rejected"
+                    f"{stats['rows_rejected']} rejected, "
+                    f"watermark -> {max_updated.isoformat()}"
                 )
-
-        with db.connection() as conn:
-            with conn.cursor() as cur:
-                stats["duplicates_collapsed"] = run_dedup(
-                    cur, touched_keys, settings.dedup_window_minutes
-                )
-                stats["raw_pruned"], stats["clean_pruned"] = retention.prune(cur)
-
-        affected_days = aggregate.rollup(touched_keys)
-
-        # Advance the watermark by one millisecond past the newest record seen,
-        # so the strict `>` comparison in the next run does not re-fetch the
-        # boundary row on every single run forever.
-        if max_updated > watermark:
-            new_watermark = max_updated + timedelta(milliseconds=1)
-            db.set_state(WATERMARK_KEY, new_watermark.isoformat())
-            stats["watermark_after"] = new_watermark
 
         stats["duration_seconds"] = round(time.monotonic() - started, 2)
         finish_run(run_id, "success", stats)

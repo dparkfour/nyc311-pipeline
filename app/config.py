@@ -78,8 +78,12 @@ class Settings:
     )
 
     # --- Retention (Neon free tier is 0.5 GB; see docs/retention) ----------
+    # raw_requests stores the full Socrata JSON payload per row (~1.6 KB), so
+    # this window is what decides whether the 0.5 GB budget holds. 7 days, not
+    # 30: a 30-day window at ~8k rows/day filled Neon on the first real ingest.
+    # See BREAKS.md 2026-09-07.
     raw_retention_days: int = field(
-        default_factory=lambda: _int("RAW_RETENTION_DAYS", 30)
+        default_factory=lambda: _int("RAW_RETENTION_DAYS", 7)
     )
     clean_retention_days: int = field(
         default_factory=lambda: _int("CLEAN_RETENTION_DAYS", 60)

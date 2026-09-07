@@ -73,7 +73,8 @@ def rollup(touched_keys: list[str] | None = None, days: int | None = None) -> li
                         AND closed_date >= created_date)    AS median_hours_to_close,
             COUNT(*) FILTER (WHERE defect_count > 0
                                AND is_duplicate_of IS NULL) AS defect_count,
-            COUNT(*) FILTER (WHERE is_duplicate_of IS NOT NULL) AS duplicate_count
+            COUNT(*) FILTER (WHERE is_duplicate_of IS NOT NULL) AS duplicate_count,
+            now()                                          AS computed_at
         FROM clean_requests
         WHERE created_date::date = ANY(%s)
         GROUP BY 1, 2, 3
