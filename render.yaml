@@ -1,0 +1,49 @@
+# Render blueprint. Two services, no database.
+#
+# The database is on NEON, deliberately and not negotiably: Render's free
+# PostgreSQL is deleted 30 days after creation (it used to be 90), which would
+# turn a link shipped in October into a dead link by mid-November. Neon's free
+# plan has no expiry and scales to zero when idle.
+#
+# To use this: Render dashboard -> New -> Blueprint -> point at the repo, then
+# set DATABASE_URL on the API service from Neon's pooled connection string.
+
+services:
+  - type: web
+    name: nyc311-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: ohio            # nearest to Neon's aws-us-east-2
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false         # set in the dashboard; never committed
+      - key: SOCRATA_APP_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        # Tighten this to the static site's origin once it has been created.
+        value: "*"
+
+  - type: web
+    name: nyc311-web
+    runtime: static
+    plan: free
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE
+        sync: false         # https://nyc311-api.onrender.com
+    routes:
+      # Single-page app: every path serves index.html and React routes it.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin

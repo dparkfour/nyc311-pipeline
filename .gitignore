@@ -1,0 +1,20 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.DS_Store
+*.egg-info/
+data/borough_boundaries.json
+web/node_modules/
+web/dist/
+web/.vite/
+.idea/
+.vscode/
+
+# session / run logs
+*.log

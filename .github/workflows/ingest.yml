@@ -1,0 +1,64 @@
+name: Ingest
+
+# The scheduler. Render's free tier has no cron jobs at all, so this workflow
+# is the pipeline's heartbeat.
+#
+# Two things about GitHub Actions cron that matter here:
+#   1. Scheduled runs are queued on a best-effort basis and can be delayed by
+#      several minutes under load. This job is idempotent — it upserts on
+#      unique_key and advances a watermark — so a late or doubled run is
+#      harmless.
+#   2. GitHub DISABLES scheduled workflows after 60 days of repository
+#      inactivity, without notice. The monthly `schedule` trigger on ci.yml
+#      counts as activity and keeps this one alive.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: "Starting watermark, if none is stored yet"
+        required: false
+        default: "3"
+
+concurrency:
+  # Never two ingests at once: they would fight over the watermark.
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Apply schema
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m app.cli migrate
+
+      - name: Ingest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+        run: |
+          python -m app.cli ingest \
+            --trigger schedule \
+            --days-back ${{ github.event.inputs.days_back || 3 }}
+
+      - name: Report
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m app.cli status
