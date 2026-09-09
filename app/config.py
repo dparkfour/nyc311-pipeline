@@ -72,9 +72,13 @@ class Settings:
     # response small enough that a mid-page failure is cheap to retry.
     page_size: int = field(default_factory=lambda: _int("PAGE_SIZE", 5000))
     # Safety rail so a bad watermark cannot try to pull the whole 40M-row
-    # dataset into a 0.5 GB database.
+    # dataset into a 0.5 GB database. 6 pages = 30k rows: enough to catch up a
+    # normal day in one run, small enough to finish inside the Actions 20-min
+    # timeout and to grow the database in bounded steps when upstream does a
+    # bulk reload. The every-15-min schedule closes any larger gap over
+    # several runs. Was 40; see BREAKS.md 2026-09-08.
     max_pages_per_run: int = field(
-        default_factory=lambda: _int("MAX_PAGES_PER_RUN", 40)
+        default_factory=lambda: _int("MAX_PAGES_PER_RUN", 6)
     )
 
     # --- Retention (Neon free tier is 0.5 GB; see docs/retention) ----------

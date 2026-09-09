@@ -5,7 +5,7 @@
 -- how Render's start command invokes it.
 --
 -- Five tables, and the reason each exists:
---   raw_requests        untouched Socrata payload, rolling 7 days
+--   raw_requests        untouched payload of FLAGGED rows only, rolling 7 days
 --   clean_requests      validated + deduplicated, rolling 60 days, served by the API
 --   validation_failures one row per rule violation, drives the quality panel
 --   daily_agg           permanent rollup; the only table that is never pruned
@@ -13,11 +13,12 @@
 
 
 -- ---------------------------------------------------------------------------
--- raw_requests: exactly what the API returned, plus ingest bookkeeping.
--- Kept so a recent validation-rule change can be replayed against real
--- payloads without re-fetching, and so "the upstream schema changed" is
--- provable. 7-day window: the payload column is large and 30 days of it
--- overran the 0.5 GB budget (BREAKS.md 2026-09-07).
+-- raw_requests: the untouched API payload, but only for rows that failed at
+-- least one validation rule. Kept so a recent rule change can be replayed
+-- against the records that were actually wrong, and so "the upstream schema
+-- changed" is provable. A full mirror of the feed overran the 0.5 GB budget
+-- when upstream did a bulk reload (BREAKS.md 2026-09-07 and 2026-09-08); a
+-- clean row is already fully represented in clean_requests. 7-day window.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS raw_requests (
     unique_key      TEXT PRIMARY KEY,

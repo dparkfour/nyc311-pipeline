@@ -24,6 +24,49 @@ later.
 
 ---
 
+## 2026-09-08 — Upstream bulk reload refilled Neon; scheduled ingest looped on DiskFull
+
+**Symptom:** the first green GitHub Actions run (run 10) fetched 200,000 rows,
+hit the 40-page cap, and left the database at 440 MB. Over the next ~18 hours
+the `*/15` cron produced runs 11-18: run 11 caught up and self-pruned 167k
+stale `clean_requests` rows, runs 12-14 were empty, then runs 15 (`partial`)
+and 16 (`failed`) both died on `psycopg.errors.DiskFull: project size limit
+(512 MB) exceeded`, and runs 17-18 were killed by the Actions 20-min timeout
+and left stuck in status `running`. `raw_requests` was 310 MB / 209k rows and
+could not be pruned -- every row had been ingested within the 7-day window.
+
+**Cause:** NYC re-published the dataset -- a bulk load that bumped `:updated_at`
+on ~200k records at once (many days of revisions in one batch). The watermark
+design handled the *correctness* of that fine (upsert on `unique_key`, resume
+per page), but three things made it fill the disk:
+1. `raw_requests` stored the full ~1.6 KB JSON payload for *every* fetched row,
+   clean or not. 200k of those is ~300 MB on a 512 MB budget.
+2. `RAW_RETENTION_DAYS=7` freed nothing: the whole backlog landed inside one
+   day, so no row was old enough to prune.
+3. `MAX_PAGES_PER_RUN=40` = 200k rows a run -- too big for the 20-min Actions
+   timeout and too big a single step for the database.
+
+The per-page checkpoint and prune-at-start from the 2026-09-07 fix did work:
+runs recovered on their own and the watermark stayed current throughout. The
+pipeline was never wrong, only out of space.
+
+**Fix:**
+- `raw_requests` now stores the payload *only for rows that failed at least one
+  validation rule* -- the only rows a rule change is ever replayed against. A
+  clean row is already fully in `clean_requests`. ~90% smaller.
+- `MAX_PAGES_PER_RUN` 40 -> 6 (30k rows/run). A larger gap closes over several
+  of the 15-minute runs instead of one oversized one.
+- Truncated `raw_requests` to reclaim the 310 MB; watermark left untouched so
+  no backlog re-fetch.
+
+**What I'd do differently:** treat "upstream republishes the whole dataset" as
+a first-class case from the start, not a surprise -- it is in the Socrata
+world a *when*, not an *if*. A storage-budget guard that refuses to start a run
+when the database is already above ~85% would have turned the loop into a
+clean skip with a log line.
+
+---
+
 ## 2026-09-07 — First real ingest filled Neon (512 MB) after 82 minutes
 
 **Symptom:** `python -m app.cli ingest --days-back 1` — the first run against

@@ -8,13 +8,15 @@ and the cause is invisible from the outside.
 
 Retention is therefore a design input, not a cleanup task:
 
-    raw_requests     7 days   payload kept for replaying recent rule changes
+    raw_requests     7 days   payload of FLAGGED rows only, for replaying rules
     clean_requests  60 days   the serving window
     daily_agg       forever   never pruned, and the reason the app ages well
 
-`raw_requests` was 30 days until the first real ingest filled the 0.5 GB budget
-in a single run (BREAKS.md 2026-09-07) -- the payload column is ~1.6 KB a row
-and 30 days of it is more than half the plan on its own.
+`raw_requests` was a full 30-day mirror of the feed until the first real ingest
+filled the 0.5 GB budget in one run, and a bulk upstream reload did it again
+even at 7 days (BREAKS.md 2026-09-07, 2026-09-08). It now stores the payload
+only for rows that failed validation -- ~1.6 KB a row, and the only rows a rule
+change is ever replayed against.
 
 `validation_failures` is pruned alongside the raw table, since a failure whose
 record is gone cannot be investigated anyway.

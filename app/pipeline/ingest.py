@@ -70,14 +70,24 @@ def finish_run(run_id: int, status: str, stats: dict, error: str | None = None) 
 # Writers
 # ---------------------------------------------------------------------------
 
-def write_raw(cur, rows: list[dict], run_id: int) -> None:
-    """Store the untouched payload. `seen_count` increments on re-fetch, which
-    is how often a record has been revised upstream -- a free, and genuinely
-    interesting, statistic."""
+def write_raw(cur, rows: list[dict], run_id: int, keep_keys: set[str]) -> None:
+    """Store the untouched payload -- but only for the rows in `keep_keys`, the
+    records that failed at least one validation rule this run.
+
+    raw_requests was a full mirror of the feed until a bulk upstream reload put
+    ~200k payloads (~1.6 KB each) into it in one run and overran the 0.5 GB
+    budget twice (BREAKS.md 2026-09-08). The payload only earns its space for
+    rows that are actually wrong: those are what a rule change gets replayed
+    against, and what proves "the upstream schema changed". A clean row is
+    already fully represented in clean_requests.
+
+    `seen_count` still increments on re-fetch -- for a flagged row that is how
+    many times upstream has revised it without fixing the defect.
+    """
     params = []
     for row in rows:
         key = row.get("unique_key")
-        if not key:
+        if not key or str(key) not in keep_keys:
             continue
         params.append(
             (
@@ -341,7 +351,7 @@ def run(
             # this page's dedup either all land or none do.
             with db.connection() as conn:
                 with conn.cursor() as cur:
-                    write_raw(cur, page, run_id)
+                    write_raw(cur, page, run_id, set(failures_by_key))
                     inserted, updated = write_clean(cur, records)
                     write_failures(cur, failures_by_key, run_id)
                     stats["duplicates_collapsed"] += run_dedup(
