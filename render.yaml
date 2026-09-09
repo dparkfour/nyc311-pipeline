@@ -5,8 +5,12 @@
 # turn a link shipped in October into a dead link by mid-November. Neon's free
 # plan has no expiry and scales to zero when idle.
 #
-# To use this: Render dashboard -> New -> Blueprint -> point at the repo, then
-# set DATABASE_URL on the API service from Neon's pooled connection string.
+# To use this: Render dashboard -> New -> Blueprint -> point at the repo. Set
+# DATABASE_URL + SOCRATA_APP_TOKEN on the API service (Neon's pooled string).
+# Then read the API service's real URL off its dashboard page -- Render appends
+# a random suffix when the name is taken, e.g. nyc311-api-gu7i.onrender.com --
+# and set it as VITE_API_BASE on the web service, then redeploy the web
+# service with "Clear build cache & deploy" (Vite bakes the URL in at build).
 
 services:
   - type: web
@@ -35,7 +39,7 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE
-        sync: false         # https://nyc311-api.onrender.com
+        sync: false         # the API service's real URL; see header note
     routes:
       # Single-page app: every path serves index.html and React routes it.
       - type: rewrite
