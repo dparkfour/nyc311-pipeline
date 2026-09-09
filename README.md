@@ -8,7 +8,7 @@ them in Postgres, and serves them through a REST API and a web front end.
 Per-run ingestion counts, per-rule failure rates, duplicates collapsed, and
 what changed since the previous run — above the data table, not behind a tab.
 
-- **App:** _(fill in after deploy)_
+- **App:** https://nyc311-web.onrender.com
 - **API docs:** `/docs` — auto-generated OpenAPI
 
 ---
