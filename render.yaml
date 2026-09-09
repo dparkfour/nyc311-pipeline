@@ -25,10 +25,11 @@ services:
         # Tighten this to the static site's origin once it has been created.
         value: "*"
 
+  # A static site takes no `plan` (always free, served from Render's CDN) and
+  # no `region`. Both are valid on the Docker service above.
   - type: web
     name: nyc311-web
     runtime: static
-    plan: free
     rootDir: web
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
