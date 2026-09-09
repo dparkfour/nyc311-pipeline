@@ -1,7 +1,8 @@
 """Daily rollup into `daily_agg` -- the only permanent table.
 
-`clean_requests` holds 60 days and `raw_requests` 30, because Neon's free tier
-is 0.5 GB and the source dataset is roughly 40 million rows. `daily_agg` is
+`clean_requests` holds 60 days and `raw_requests` keeps 7 days of flagged-row
+payloads only, because Neon's free tier is 0.5 GB and the source dataset is
+roughly 40 million rows. `daily_agg` is
 what makes the app still worth opening in April: one row per day x borough x
 complaint type is a few megabytes for a year, and it is the trend data no
 screener can tell was cheap to keep.

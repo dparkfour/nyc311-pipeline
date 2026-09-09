@@ -195,8 +195,9 @@ export default function App() {
         Ingestion is watermarked on Socrata's <code>:updated_at</code> rather than
         <code> created_date</code>, because 311 records are revised after they are
         filed and a creation-time watermark never sees those revisions.
-        Retention is bounded by a 0.5 GB storage budget: 30 days raw, 60 days
-        clean, daily aggregates kept permanently.
+        Retention is bounded by a 0.5 GB storage budget: raw payloads of
+        flagged rows for 7 days, clean records for 60, daily aggregates kept
+        permanently.
       </footer>
     </div>
   )
